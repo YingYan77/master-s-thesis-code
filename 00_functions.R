@@ -412,4 +412,338 @@ reshape_betas <- function(dt) {
 }
 
 
+######################### funtions used in 02b and 03b #########################
 
+get_qtile_data <- function(dt, varlists, extreme){
+  dt_clean <- dt[complete.cases(dt[, ..varlists])]
+  
+  dt_clean[, (paste0("qtile_", varlists)) := 
+             lapply(.SD, function(var) findInterval(var, 
+                                                    quantile(var, prob = c(extreme,.25,.5,.75,(1-extreme)), na.rm = TRUE), 
+                                                    left.open = TRUE) + 1),
+           by = .(date),
+           .SDcols = varlists]
+  
+  return(dt_clean)
+}
+
+# portfolio function for herding 
+get_buyhold_portfolio <- function(dt, investor, weight = c("equal", "holding_changes"), 
+                                  portfolio = c("1", "10", "10-1")){
+  # get weight variables 
+  weight_var <- investor
+  
+  # get the top and bottom deciles 
+  bottom5 <- dt[get(paste0("qtile_", investor))==1, ]
+  top5 <- dt[get(paste0("qtile_", investor))==6, ]
+  
+  # calculate the daily weighted average return 
+  if (weight == "equal") {
+    bottom_portfolio <- bottom5[, .(retp_lead_0 = mean(ret_lead_0, na.rm = TRUE)*100, 
+                                    retp_lead_1 = mean(ret_lead_1, na.rm = TRUE)*100, 
+                                    retp_lead_5 = mean((cumret_5d - 1)/5, na.rm = TRUE)*100, 
+                                    retp_lead_10 = mean((cumret_10d - 1)/10, na.rm = TRUE)*100, 
+                                    retp_lead_20 = mean((cumret_10d - 1)/20, na.rm = TRUE)*100), 
+                                by = .(date)]
+    
+    top_portfolio <- top5[, .(retp_lead_0 = mean(ret_lead_0, na.rm = TRUE)*100, 
+                              retp_lead_1 = mean(ret_lead_1, na.rm = TRUE)*100, 
+                              retp_lead_5 = mean((cumret_5d - 1)/5, na.rm = TRUE)*100, 
+                              retp_lead_10 = mean((cumret_10d - 1)/10, na.rm = TRUE)*100, 
+                              retp_lead_20 = mean((cumret_10d - 1)/20, na.rm = TRUE)*100), 
+                          by = .(date)]
+    
+    
+  } else if (weight == "holding_changes") {
+    bottom5[, change_weight := abs(get(weight_var)) / sum(abs(get(weight_var))), 
+            by = .(date)]
+    top5[, change_weight := abs(get(weight_var)) / sum(abs(get(weight_var))), 
+         by = .(date)]
+    
+    bottom_portfolio <- bottom5[, .(retp_lead_0 = sum(change_weight*ret_lead_0, na.rm = TRUE)*100, 
+                                    retp_lead_1 = sum(change_weight*ret_lead_1, na.rm = TRUE)*100, 
+                                    retp_lead_5 = sum(change_weight*(cumret_5d - 1)/5, na.rm = TRUE)*100, 
+                                    retp_lead_10 = sum(change_weight*(cumret_10d - 1)/10, na.rm = TRUE)*100,
+                                    retp_lead_20 = sum(change_weight*(cumret_20d - 1)/20, na.rm = TRUE)*100), 
+                                by = .(date)]
+    
+    top_portfolio <- top5[, .(retp_lead_0 = sum(change_weight*ret_lead_0, na.rm = TRUE)*100, 
+                              retp_lead_1 = sum(change_weight*ret_lead_1, na.rm = TRUE)*100, 
+                              retp_lead_5 = sum(change_weight*(cumret_5d - 1)/5, na.rm = TRUE)*100, 
+                              retp_lead_10 = sum(change_weight*(cumret_10d - 1)/10, na.rm = TRUE)*100,
+                              retp_lead_20 = sum(change_weight*(cumret_20d - 1)/20, na.rm = TRUE)*100), 
+                          by = .(date)]
+    
+    
+  } 
+  
+  long_short_portfolio <- top_portfolio[, .(date = date, 
+                                            retp_lead_0 = retp_lead_0 - bottom_portfolio$retp_lead_0, 
+                                            retp_lead_1 = retp_lead_1 - bottom_portfolio$retp_lead_1,
+                                            retp_lead_5 = retp_lead_5 - bottom_portfolio$retp_lead_5, 
+                                            retp_lead_10 = retp_lead_10 - bottom_portfolio$retp_lead_10, 
+                                            retp_lead_20 = retp_lead_20 - bottom_portfolio$retp_lead_20)]
+  
+  if (portfolio == "10") {
+    return(top_portfolio)
+  } else if (portfolio == "1") {
+    return(bottom_portfolio)
+  } else if (portfolio == "10-1") {
+    return(long_short_portfolio)
+  }
+}
+
+# portfolio function for return tracing
+get_buyhold_ret_portfolio <- function(dt, investor, weight_var, weight = c("equal", "holding_changes"), 
+                                      portfolio = c("1", "10", "101")){
+  # # get weight variables 
+  # weight_var <- investor
+  
+  # get the top and bottom deciles 
+  bottom5 <- dt[get(paste0("qtile_", investor))==1, ]
+  top5 <- dt[get(paste0("qtile_", investor))==6, ]
+  extreme5 <- dt[get(paste0("qtile_", investor)) %in% c(1,6), ]
+  
+  # calculate the daily weighted average return 
+  if (weight == "equal") {
+    bottom_portfolio <- bottom5[, .(retp_lead_0 = mean(ret_lead_0, na.rm = TRUE)*100, 
+                                    retp_lead_1 = mean(ret_lead_1, na.rm = TRUE)*100, 
+                                    retp_lead_5 = mean((cumret_5d - 1)/5, na.rm = TRUE)*100, 
+                                    retp_lead_10 = mean((cumret_10d - 1)/10, na.rm = TRUE)*100), 
+                                by = .(date)]
+    
+    top_portfolio <- top5[, .(retp_lead_0 = mean(ret_lead_0, na.rm = TRUE)*100, 
+                              retp_lead_1 = mean(ret_lead_1, na.rm = TRUE)*100, 
+                              retp_lead_5 = mean((cumret_5d - 1)/5, na.rm = TRUE)*100, 
+                              retp_lead_10 = mean((cumret_10d - 1)/10, na.rm = TRUE)*100), 
+                          by = .(date)]
+    
+    
+    extreme_portfolio <- extreme5[, .(retp_lead_0 = mean(ret_lead_0, na.rm = TRUE)*100, 
+                                      retp_lead_1 = mean(ret_lead_1, na.rm = TRUE)*100, 
+                                      retp_lead_5 = mean((cumret_5d - 1)/5, na.rm = TRUE)*100, 
+                                      retp_lead_10 = mean((cumret_10d - 1)/10, na.rm = TRUE)*100), 
+                                  by = .(date)]
+    
+  } else if (weight == "holding_changes") {
+    bottom5[, change_weight := abs(get(weight_var)) / sum(abs(get(weight_var))), 
+            by = .(date)]
+    top5[, change_weight := abs(get(weight_var)) / sum(abs(get(weight_var))), 
+         by = .(date)]
+    extreme5[, change_weight := abs(get(weight_var)) / sum(abs(get(weight_var))), 
+             by = .(date)]
+    
+    bottom_portfolio <- bottom5[, .(retp_lead_0 = sum(change_weight*ret_lead_0, na.rm = TRUE)*100, 
+                                    retp_lead_1 = sum(change_weight*ret_lead_1, na.rm = TRUE)*100, 
+                                    retp_lead_5 = sum(change_weight*(cumret_5d - 1)/5, na.rm = TRUE)*100, 
+                                    retp_lead_10 = sum(change_weight*(cumret_10d - 1)/10, na.rm = TRUE)*100), 
+                                by = .(date)]
+    
+    top_portfolio <- top5[, .(retp_lead_0 = sum(change_weight*ret_lead_0, na.rm = TRUE)*100, 
+                              retp_lead_1 = sum(change_weight*ret_lead_1, na.rm = TRUE)*100, 
+                              retp_lead_5 = sum(change_weight*(cumret_5d - 1)/5, na.rm = TRUE)*100, 
+                              retp_lead_10 = sum(change_weight*(cumret_10d - 1)/10, na.rm = TRUE)*100), 
+                          by = .(date)]
+    
+    
+    extreme_portfolio <- extreme5[, .(retp_lead_0 = sum(change_weight*ret_lead_0, na.rm = TRUE)*100, 
+                                      retp_lead_1 = sum(change_weight*ret_lead_1, na.rm = TRUE)*100, 
+                                      retp_lead_5 = sum(change_weight*(cumret_5d - 1)/5, na.rm = TRUE)*100, 
+                                      retp_lead_10 = sum(change_weight*(cumret_10d - 1)/10, na.rm = TRUE)*100), 
+                                  by = .(date)]
+  } 
+  
+  if (portfolio == "10") {
+    return(top_portfolio)
+  } else if (portfolio == "1") {
+    return(bottom_portfolio)
+  } else if (portfolio == "101") {
+    return(extreme_portfolio)
+  }
+}
+
+get_alpha <- function(dt, ret_choice, hperiod, investor, dcile, weight) {
+  
+  Excess <- lm(get(ret_choice) ~ 1, data = dt)
+  NW_Excess <- NeweyWest(Excess, lag = 1, prewhite = FALSE, adjust = TRUE)
+  se_Excess <- sqrt(diag(NW_Excess))[1]
+  # se_Excess <- sqrt(diag(vcovHAC(Excess, prewhite = FALSE)))[1]
+  alpha_Excess <- Excess$coefficients[1]
+  t_Excess <- alpha_Excess / se_Excess
+  
+  CAPM <- lm(get(ret_choice) ~ Mkt.RF, data = dt)
+  ## Newey-West adjusted t-test
+  NW_CAPM <- NeweyWest(CAPM, lag = 1, prewhite = FALSE, adjust = TRUE)
+  se_CAPM <- sqrt(diag(NW_CAPM))[1]
+  # se_CAPM <- sqrt(diag(vcovHAC(CAPM, prewhite = FALSE)))[1]
+  alpha_CAPM <- CAPM$coefficients[1]
+  t_CAPM <- alpha_CAPM / se_CAPM 
+  
+  FF3 <- lm(get(ret_choice) ~ Mkt.RF + SMB + HML, data = dt)
+  NW_FF3 <- NeweyWest(FF3, lag = 1, prewhite = FALSE, adjust = TRUE)
+  se_FF3 <- sqrt(diag(NW_FF3))[1]
+  # se_FF3 <- sqrt(diag(vcovHAC(FF3, prewhite = FALSE)))[1]
+  alpha_FF3 <- FF3$coefficients[1]
+  t_FF3 <- alpha_FF3 / se_FF3 
+  
+  FF6 <- lm(get(ret_choice) ~ Mkt.RF + SMB + HML + RMW + CMA + Mom, data = dt)
+  NW_FF6 <- NeweyWest(FF6, lag = 1, prewhite = FALSE, adjust = TRUE)
+  se_FF6 <- sqrt(diag(NW_FF6))[1]
+  # se_FF6 <- sqrt(diag(vcovHAC(FF6, prewhite = FALSE)))[1]
+  alpha_FF6 <- FF6$coefficients[1]
+  t_FF6 <- alpha_FF6 / se_FF6 
+  
+  output <- rbind(c(alpha_Excess, se_Excess, t_Excess), 
+                  c(alpha_CAPM, se_CAPM, t_CAPM), 
+                  c(alpha_FF3, se_FF3, t_FF3), 
+                  c(alpha_FF6, se_FF6, t_FF6))
+  colnames(output) <- c('estimate', 'std.error', 't.value')
+  output <- as.data.frame(output)
+  output <- output |> 
+    mutate(intercept = case_when(abs(t.value) >= 2.576 ~ paste0(round(estimate,3), "***"), 
+                                 abs(t.value) >= 1.96 ~ paste0(round(estimate,3), "**"), 
+                                 abs(t.value) >= 1.645 ~ paste0(round(estimate,3), "*"), 
+                                 abs(t.value) < 1.645 ~ paste0(round(estimate,3))
+    ))
+  
+  output$model <- c("Excess", "CAPM", "FF3", "FF6")
+  output$type <- investor
+  output$day <- hperiod
+  output$decile <- dcile
+  output$weight <- weight
+  
+  return(output)
+}
+
+
+get_diff_alpha <- function(dt1, dt10, ret_choice, 
+                           model = c("Excess", "CAPM", "FF3", "FF6"), 
+                           hperiod, investor, weight) {
+  n <- max(nrow(dt1), nrow(dt10))
+  if (model == "Excess") {
+    model_1 <- lm(get(ret_choice) ~ 1, data = dt1)
+    model_10 <- lm(get(ret_choice) ~ 1, data = dt10)
+  } else if (model == "CAPM") {
+    model_1 <- lm(get(ret_choice) ~ Mkt.RF, data = dt1)
+    model_10 <- lm(get(ret_choice) ~ Mkt.RF, data = dt10)
+  } else if (model == "FF3") {
+    model_1 <- lm(get(ret_choice) ~ Mkt.RF + SMB + HML, data = dt1)
+    model_10 <- lm(get(ret_choice) ~ Mkt.RF + SMB + HML, data = dt10)
+  } else if (model == "FF6") {
+    model_1 <- lm(get(ret_choice) ~ Mkt.RF + SMB + HML + CMA + Mom, data = dt1)
+    model_10 <- lm(get(ret_choice) ~ Mkt.RF + SMB + HML + CMA + Mom, data = dt10)
+  }
+  
+  vcov_1 <- NeweyWest(model_1, lag = 1, prewhite = FALSE, adjust = TRUE)
+  se_1 <- sqrt(diag(vcov_1))[1]
+  alpha_1 <- coef(model_1)[1]
+  residuals_1 <- residuals(model_1)
+  
+  vcov_10 <- NeweyWest(model_10, lag = 1, prewhite = FALSE, adjust = TRUE)
+  se_10 <- sqrt(diag(vcov_10))[1]
+  alpha_10 <- coef(model_10)[1]
+  residuals_10 <- residuals(model_10)
+  
+  cov_residuals <- sum(residuals_1 * residuals_10) / n - 1 
+  # Estimate the covariance of the intercepts (using similar scaling as in Newey-West)
+  # Scale by the inverse of the sum of the squared weights (1/n) in each model
+  X1 <- model.matrix(model_1)
+  X10 <- model.matrix(model_10)
+  cov_alpha1_alpha2 <- cov_residuals * solve(t(X1) %*% X1)[1, 1] * solve(t(X10) %*% X10)[1, 1]
+  
+  var_diff_alpha <- vcov_1[1,1] + vcov_10[1,1] - 2*cov_alpha1_alpha2
+  se_diff <- sqrt(var_diff_alpha)
+  alpha_diff <- alpha_10 - alpha_1
+  t_diff <- alpha_diff/se_diff
+  
+  output <- as.data.frame(c(alpha_diff, se_diff, t_diff))
+  output <- as.data.frame(t(output))
+  
+  colnames(output) <- c('estimate', 'std.error', 't.value')
+  rownames(output) <- NULL
+  output <- output |> 
+    mutate(intercept = case_when(abs(t.value) >= 2.576 ~ paste0(round(estimate,3), "***"), 
+                                 abs(t.value) >= 1.96 ~ paste0(round(estimate,3), "**"), 
+                                 abs(t.value) >= 1.645 ~ paste0(round(estimate,3), "*"), 
+                                 abs(t.value) < 1.645 ~ paste0(round(estimate,3))
+    ))
+  
+  output$model <- model
+  output$type <- investor
+  output$day <- hperiod
+  output$decile <- "longshort"
+  output$weight <- weight
+  
+  return(output)
+}
+
+# for herding
+get_ret_alpha <- function(dt, varlists) {
+  alphas <- data.frame()
+  
+  for (i in varlists) {
+    for (j in c(0,1,5,10,20)) {
+      for (l in c("equal", "holding_changes")) {
+        for (k in c("10", "1")) {
+          ret_portfolio <- get_buyhold_portfolio(dt, investor = i, weight = l, portfolio = k)
+          ret_portfolio <- merge(ret_portfolio, ff6, by.x = c("date"), by.y = c("Date"))
+          ret_portfolio[, Retp.Rf := get(paste0("retp_lead_",j)) - RF] 
+          result <- get_alpha(ret_portfolio, "Retp.Rf", hperiod = j, investor = i, dcile = k, weight = l)
+          
+          alphas <- rbind(alphas, result)
+        }
+        for (n in c("Excess", "CAPM", "FF3", "FF6")) {
+          ret_portfolio_1 <- get_buyhold_portfolio(dt, i, weight = l, portfolio = 1)
+          ret_portfolio_1 <- merge(ret_portfolio_1, ff6, by.x = c("date"), by.y = c("Date"))
+          ret_portfolio_1[, Retp.Rf := get(paste0("retp_lead_",j)) - RF] 
+          
+          ret_portfolio_10 <- get_buyhold_portfolio(dt, i, weight = l, portfolio = 10)
+          ret_portfolio_10 <- merge(ret_portfolio_10, ff6, by.x = c("date"), by.y = c("Date"))
+          ret_portfolio_10[, Retp.Rf := get(paste0("retp_lead_",j)) - RF] 
+          
+          result <- get_diff_alpha(ret_portfolio_1, ret_portfolio_10, 
+                                   model = n, "Retp.Rf", hperiod = j, investor = i, weight = l)
+          
+          alphas <- rbind(alphas, result)
+        }
+      }
+    }
+  }
+  return(alphas)
+  
+}
+# for return tracing
+get_ret_alpha_extreme <- function(dt, varlists, retvar) {
+  alphas <- data.frame()
+  
+  for (i in varlists) {
+    for (j in c(0, 1, 5, 10)) {
+      for (l in c("equal", "holding_changes")) {
+        for (k in c("10", "1", "101")) {
+          ret_portfolio <- get_buyhold_ret_portfolio(dt, investor = retvar, weight_var = i, weight = l, portfolio = k)
+          ret_portfolio <- merge(ret_portfolio, ff6, by.x = c("date"), by.y = c("Date"))
+          ret_portfolio[, Retp.Rf := get(paste0("retp_lead_",j)) - RF] 
+          result <- get_alpha(ret_portfolio, "Retp.Rf", hperiod = j, investor = i, dcile = k, weight = l)
+          
+          alphas <- rbind(alphas, result)
+        }
+        for (n in c("Excess", "CAPM", "FF3", "FF6")) {
+          ret_portfolio_1 <- get_buyhold_ret_portfolio(dt, investor = retvar, weight_var = i, weight = l, portfolio = 1)
+          ret_portfolio_1 <- merge(ret_portfolio_1, ff6, by.x = c("date"), by.y = c("Date"))
+          ret_portfolio_1[, Retp.Rf := get(paste0("retp_lead_",j)) - RF] 
+          
+          ret_portfolio_10 <- get_buyhold_ret_portfolio(dt, investor = retvar, weight_var = i, weight = l, portfolio = 10)
+          ret_portfolio_10 <- merge(ret_portfolio_10, ff6, by.x = c("date"), by.y = c("Date"))
+          ret_portfolio_10[, Retp.Rf := get(paste0("retp_lead_",j)) - RF] 
+          
+          result <- get_diff_alpha(ret_portfolio_1, ret_portfolio_10, 
+                                   model = n, "Retp.Rf", hperiod = j, investor = i, weight = l)
+          
+          alphas <- rbind(alphas, result)
+        }
+      }
+    }
+  }
+  return(alphas)
+  
+}
