@@ -747,3 +747,149 @@ get_ret_alpha_extreme <- function(dt, varlists, retvar) {
   return(alphas)
   
 }
+
+########################### funtions used in 04b ###############################
+
+## create the function to calculate the standard error clustered test average value
+get_sue_holding_ret_result <- function(varlist, data, invlist) {
+  test_result <- data.frame()
+  
+  for (investor in invlist) { 
+    data[, sap_qtile := findInterval(get(investor), 
+                                     quantile(get(investor), prob=c(.2,.4,.6,.8), na.rm = T), left.open = T) + 1, 
+         by = .(datacqtr, earning_qtile)] 
+    
+    for (i in 1:5) { 
+      for (j in 1:5) {
+        subset_data <- data[earning_qtile == i & sap_qtile == j]
+        for (var in varlist) { 
+          formula <- as.formula(paste(var,"~ 1"))
+          model <- lm(formula, data = subset_data)
+          clustered_se <- vcovCL(model, cluster = subset_data$datacqtr)
+          result <- coeftest(model, vcov. = clustered_se)
+          
+          output <- data.frame(
+            var_name = var,
+            estimate = result[1],
+            std.error = result[2],
+            t.value = result[3],
+            p.value = result[4], 
+            sue_qtile = i, 
+            sap_qtile = j, 
+            investor = investor
+          )
+          
+          test_result <- rbind(test_result, output)
+          
+        }
+      }
+    }}
+  
+  test_result <- test_result |>
+    mutate(mean = case_when(abs(p.value) <= 0.01 ~ paste0(round(estimate*100,3), "***"),
+                            abs(p.value) <= 0.05 & abs(p.value) >= 0.01 ~ paste0(round(estimate*100,3), "**"),
+                            abs(p.value) <= 0.1  & abs(p.value) >= 0.05 ~ paste0(round(estimate*100,3), "*"),
+                            abs(p.value) > 0.1 ~ paste0(round(estimate*100,3))), 
+           sd = paste0("(",round(std.error*100,3), ")"))
+  
+  return(test_result)
+}
+
+get_sue_qtile_diff_ret <- function(varlist, data, invlist) {
+  test_result <- data.frame()
+  
+  for (investor in invlist) { 
+    data[, sap_qtile := findInterval(get(investor), 
+                                     quantile(get(investor), prob=c(.2,.4,.6,.8), na.rm = T), left.open = T) + 1, 
+         by = .(datacqtr, earning_qtile)] 
+    
+    for (i in 1:5) { 
+      
+      subset_data <- data[earning_qtile == i & (sap_qtile == 1 | sap_qtile == 5)]
+      subset_data$sap_indicator <- ifelse(subset_data$sap_qtile == 5, 1, 0)
+      
+      for (var in varlist) {
+        formula <- as.formula(paste(var,"~ sap_indicator | datacqtr"))
+        
+        model <- feols(formula, data = subset_data, cluster = ~datacqtr)
+        coefs <- model$coefficients
+        cluster_se <- model$se
+        
+        output <- data.frame(
+          var_name = var,
+          estimate = coefs[1],
+          std.error = cluster_se[1],
+          t.value = coefs / cluster_se,
+          sue_qtile = i, 
+          sap_qtile = 6, 
+          investor = investor
+        )
+        
+        test_result <- rbind(test_result, output)
+      }
+    }
+    
+    for (j in 1:5) { 
+      
+      subset_data <- data[(earning_qtile == 1 | earning_qtile == 5) & sap_qtile == j]
+      subset_data$sue_indicator <- ifelse(subset_data$earning_qtile == 5, 1, 0)
+      
+      for (var in varlist) {
+        formula <- as.formula(paste(var,"~ sue_indicator | datacqtr"))
+        
+        model <- feols(formula, data = subset_data, cluster = ~datacqtr)
+        coefs <- model$coefficients
+        cluster_se <- model$se
+        
+        output <- data.frame(
+          var_name = var,
+          estimate = coefs[1],
+          std.error = cluster_se[1],
+          t.value = coefs / cluster_se,
+          sue_qtile = 6, 
+          sap_qtile = j, 
+          investor = investor
+        )
+        
+        test_result <- rbind(test_result, output)
+      }
+    }}
+  
+  
+  test_result <- test_result |> 
+    mutate(mean = case_when(abs(t.value) >= 2.576 ~ paste0(round(estimate*100,3), "***"), 
+                            abs(t.value) >= 1.96 ~ paste0(round(estimate*100,3), "**"), 
+                            abs(t.value) >= 1.645 ~ paste0(round(estimate*100,3), "*"), 
+                            abs(t.value) < 1.645 ~ paste0(round(estimate*100,3))), 
+           sd = paste0("(",round(std.error*100,3), ")"))
+  
+  return(test_result)
+}
+
+reshape_sue_timelag <- function(dt) {
+  library(dplyr)
+  library(tidyr)
+  
+  # Ensure sue_qtile is treated as a factor or integer
+  dt <- dt %>%
+    mutate(sue_qtile = as.integer(sue_qtile), 
+           sap_qtile = as.integer(sap_qtile),
+           row_name = paste0(var_name, "_", sue_qtile))
+  
+  # Reshape estimates
+  estimates_wide <- dt %>%
+    select(row_name, sap_qtile, mean) %>%
+    pivot_wider(names_from = sap_qtile, values_from = mean)
+  
+  # Reshape standard errors
+  stderr_wide <- dt %>%
+    select(row_name, sap_qtile, sd) %>%
+    pivot_wider(names_from = sap_qtile, values_from = sd)
+  
+  # list(estimates = estimates_wide, std_errors = stderr_wide)
+  
+  combined_result <- rbind(estimates_wide, stderr_wide)
+  combined_result <- combined_result |> arrange(row_name)
+  
+  return(combined_result)
+}
